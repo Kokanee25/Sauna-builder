@@ -56,14 +56,35 @@ class SaunaBuild:
         # TODO(ezdxf): emit wall section + plan with every plane driven off
         # the same offsets used above, so the drawing cannot diverge from the
         # validated model. Hook a real writer here once a clean result is
-        # required before drawings are produced.
-        print(f"[dxf] (stub) would emit '{self.name}' — model is clash-free.")
+        # required before drawings are produced. The planes below are exactly
+        # the ones a writer would consume.
+        planes = {"cladding": self.wall.cladding_plane,
+                  "finish": self.wall.finish_plane}
+        for d in self.details:
+            if isinstance(d, DoorJamb):
+                planes["jamb_casing_face"] = d.casing_face
+        drawn = ", ".join(f"{k}={v:.1f}" for k, v in planes.items())
+        print(f"[dxf] (stub) would emit '{self.name}' — model is clash-free. "
+              f"planes: {drawn}")
 
 
 # ---------------------------------------------------------------------------
 # Reference outdoor build: out-sulated rainscreen, thermo-aspen slat cladding
 # ---------------------------------------------------------------------------
-def reference_build() -> SaunaBuild:
+# An INDEPENDENT record of what the existing drawing set claims for the front
+# interfaces. In production this comes from the DXF you already emitted / a shop
+# ticket — NOT re-derived from the wall here. Feeding it as expect= turns the
+# guards into a real reconciliation: if the model and this record ever diverge,
+# validation CLASHes. (Edit any value to a wrong number to see it fire.)
+EXTERNAL_AS_DRAWN = {
+    "fascia_face": inch(3.75),          # 95.2 mm
+    "jamb_extension": inch(3.75),
+    "threshold_extension": inch(3.75),
+}
+
+
+def reference_build(external: dict | None = None) -> SaunaBuild:
+    ext = external or {}
     wall = (Assembly("outdoor sauna wall", "exterior face of 1/2\" ZIP sheathing")
             .add("exterior insulation (Comfortboard)", inch(1.5))
             .add("rainscreen furring v (drainage)", inch(0.75), is_drainage_gap=True)
@@ -71,17 +92,21 @@ def reference_build() -> SaunaBuild:
             .add("dark slat cladding (thermo-aspen)", inch(0.75)))
 
     details = [
-        FasciaDetail(wall=wall, base_fascia_face=inch(0.5)),
+        FasciaDetail(wall=wall, base_fascia_face=inch(0.5),
+                     expect_face=ext.get("fascia_face")),
         DoorJamb(wall=wall, frame_face=inch(0.0),
-                 casing="proud", proud_reveal=inch(0.125)),
+                 casing="proud", proud_reveal=inch(0.125),
+                 expect_extension=ext.get("jamb_extension")),
         Threshold(wall=wall, frame_sill_face=inch(0.0), interior_floor_top=0.0,
-                  step_down=inch(0.5), pan_slope_pct=4.0),  # 4% clears min fall
+                  step_down=inch(0.5), pan_slope_pct=4.0,  # 4% clears min fall
+                  expect_extension=ext.get("threshold_extension")),
     ]
     return SaunaBuild("outdoor-reference", wall, details)
 
 
 def main() -> int:
-    build = reference_build()
+    # Reconcile the model against the independently-maintained drawing record.
+    build = reference_build(external=EXTERNAL_AS_DRAWN)
     ok = build.report()
     return 0 if ok else 1
 

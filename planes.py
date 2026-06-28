@@ -64,12 +64,14 @@ def _dedupe(values, tol: float = 0.5) -> tuple[float, ...]:
 
 # Common ripped/sheet stock thicknesses you can actually buy/produce (mm).
 # Used to flag jamb extensions that can't come from a single piece.
-# De-duped so the imperial-derived and round-metric near-twins don't both sit
-# in the list ~0.4 mm apart.
+# Imperial dressed sizes (the real products you'd rip from) plus the few metric
+# sheet goods that have no close imperial twin. De-duped so near-identical sizes
+# don't both sit in the list; we keep the genuine imperial dimension (e.g. the
+# 38.1 mm dressed 2x) rather than a rounded metric stand-in.
 STD_STOCK_MM = _dedupe((
     inch(0.25), inch(0.5), inch(0.625), inch(0.75), inch(1.0),
-    inch(1.5),  # nominal 2x dressed
-    19.0, 12.0, 9.0, 6.0, 25.0, 38.0,
+    inch(1.5),  # nominal 2x dressed = 38.1 mm
+    9.0, 18.0,  # common metric sheet goods, no close imperial twin
 ))
 MAX_STOCK_MM = max(STD_STOCK_MM)
 
@@ -275,6 +277,7 @@ class DoorJamb:
     casing: str = "flush"   # "flush" | "proud" reveal intent
     proud_reveal: float = 0.0  # mm if casing == "proud"
     head_drip: float = inch(0.5)  # how far head flashing must clear past stack
+    min_head_drip: float = inch(0.25)  # minimum acceptable drip past cladding
     expect_extension: Optional[float] = None  # external cross-check on jamb depth
 
     @property
@@ -302,36 +305,49 @@ class DoorJamb:
                 f"too far out for this cladding stack."))
             return issues
 
-        issues.append(Issue(Severity.OK, "jamb",
-            f"jamb extension depth = {d:.1f} mm ({mm_to_in(d):.2f}\")  "
-            f"[finish {self.wall.finish_plane:.1f} - frame {self.frame_face:.1f}]"))
-
         ext = _expect_issue("jamb", "jamb extension", d, self.expect_extension,
                             self.wall.tol)
         if ext:
             issues.append(ext)
 
-        stock, leftover = nearest_stock(d)
-        if stock is None:
-            n = plies_required(d)
-            issues.append(Issue(Severity.WARN, "jamb",
-                f"depth {d:.1f} mm exceeds any single stock; LAMINATE {n} plies "
-                f"of {MAX_STOCK_MM:.1f} mm or build a box extension."))
-        elif leftover > 1.0:
-            issues.append(Issue(Severity.WARN, "jamb",
-                f"no exact stock for {d:.1f} mm; nearest single piece "
-                f"{stock:.1f} mm ({mm_to_in(stock):.2f}\") — rip to {d:.1f}, or "
-                f"laminate to size."))
+        if d <= self.wall.tol:
+            # Frame sits at (within tol of) the finish plane — nothing to extend.
+            issues.append(Issue(Severity.OK, "jamb",
+                f"frame flush with finish plane ({d:.1f} mm) — no jamb extension "
+                f"required."))
+        else:
+            issues.append(Issue(Severity.OK, "jamb",
+                f"jamb extension depth = {d:.1f} mm ({mm_to_in(d):.2f}\")  "
+                f"[finish {self.wall.finish_plane:.1f} - frame {self.frame_face:.1f}]"))
 
-        # head flashing must clear stack
-        if self.head_flashing_projection <= self.wall.cladding_plane:
+            stock, leftover = nearest_stock(d)
+            if stock is None:
+                n = plies_required(d)
+                issues.append(Issue(Severity.WARN, "jamb",
+                    f"depth {d:.1f} mm exceeds any single stock; LAMINATE {n} plies "
+                    f"of {MAX_STOCK_MM:.1f} mm or build a box extension."))
+            elif leftover > 1.0:
+                issues.append(Issue(Severity.WARN, "jamb",
+                    f"no exact stock for {d:.1f} mm; nearest single piece "
+                    f"{stock:.1f} mm ({mm_to_in(stock):.2f}\") — rip to {d:.1f}, or "
+                    f"laminate to size."))
+
+        # Head flashing must clear the cladding plane by an ADEQUATE drip.
+        clearance = self.head_flashing_projection - self.wall.cladding_plane
+        if clearance <= 0:
             issues.append(Issue(Severity.CLASH, "jamb-head",
-                "head flashing does not project past cladding plane."))
+                f"head flashing does not project past cladding plane "
+                f"(clearance {clearance:.1f} mm)."))
+        elif clearance + 1e-9 < self.min_head_drip:
+            issues.append(Issue(Severity.WARN, "jamb-head",
+                f"head flashing clears cladding by only {clearance:.1f} mm "
+                f"(< min {self.min_head_drip:.1f} mm) — increase head_drip so water "
+                f"sheds free of the wall."))
         else:
             issues.append(Issue(Severity.OK, "jamb-head",
                 f"head flashing projection = {self.head_flashing_projection:.1f} mm "
                 f"(clears cladding {self.wall.cladding_plane:.1f} by "
-                f"{self.head_drip:.1f})"))
+                f"{clearance:.1f} mm)"))
         return issues
 
 
@@ -356,7 +372,7 @@ class Threshold:
     step_down: float = inch(0.5)    # exterior threshold top below interior FF (Z)
     pan_slope_pct: float = 2.0      # sill-pan slope to exterior
     drain_gap: float = inch(0.375)  # vented gap under cladding bottom course
-    min_pan_fall: float = 6.0       # mm; minimum acceptable sill-pan fall
+    min_slope_pct: float = 2.0      # minimum acceptable sill-pan slope (~1/4":12")
     expect_extension: Optional[float] = None  # external cross-check on reach (X)
 
     @property
@@ -392,15 +408,16 @@ class Threshold:
         if ext:
             issues.append(ext)
 
-        if self.pan_fall + 1e-9 < self.min_pan_fall:
+        # Sill pans are governed by a minimum SLOPE, not an absolute fall — over
+        # a short reach even a correct slope yields only a few mm of fall.
+        if self.pan_slope_pct + 1e-9 < self.min_slope_pct:
             issues.append(Issue(Severity.WARN, "threshold-pan",
-                f"sill-pan fall {self.pan_fall:.1f} mm over {t:.1f} mm "
-                f"@ {self.pan_slope_pct:.1f}% is below min {self.min_pan_fall:.1f} mm "
-                f"— increase slope or extension."))
+                f"sill-pan slope {self.pan_slope_pct:.1f}% is below min "
+                f"{self.min_slope_pct:.1f}% — steepen the pan."))
         else:
             issues.append(Issue(Severity.OK, "threshold-pan",
-                f"sill-pan fall = {self.pan_fall:.1f} mm over {t:.1f} mm "
-                f"@ {self.pan_slope_pct:.1f}% (sloped to exterior)"))
+                f"sill-pan slope {self.pan_slope_pct:.1f}% (>= {self.min_slope_pct:.1f}% "
+                f"min) -> fall {self.pan_fall:.1f} mm over {t:.1f} mm to exterior"))
 
         if self.step_down <= 0:
             issues.append(Issue(Severity.WARN, "threshold-step",

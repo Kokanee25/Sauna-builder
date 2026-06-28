@@ -80,6 +80,30 @@ Full detail in [`docs/11-build-sequence-checklist.md`](docs/11-build-sequence-ch
 
 ---
 
+## Parametric detailing engine (code)
+
+Alongside the written blueprint, the repo ships a small Python engine for
+reconciling construction details of the **outdoor rainscreen-clad variant**,
+where the envelope (out-sulation, drainage cavity, fascia/jamb/threshold) is the
+hard part.
+
+| File | Purpose |
+|------|---------|
+| [`planes.py`](planes.py) | Datum + layer-stack model. One datum per assembly; every interface is a derived delta off the same stack, so two details can't disagree. Clash/fit/coplanarity are real assertions. |
+| [`sauna_engine.py`](sauna_engine.py) | Build orchestrator: defines the reference outdoor envelope, validates every interface, prints a report, and is where a DXF emitter hooks in. |
+| [`tests/test_planes.py`](tests/test_planes.py) | Proves the guards actually catch disagreements (stale inputs, frame-proud, non-coplanar). |
+
+```bash
+python3 sauna_engine.py        # build + validate the reference envelope
+python3 planes.py              # the standalone detailing demo
+python3 tests/test_planes.py   # run the test suite (no pytest needed)
+```
+
+The guarantee is enforced two ways: **single-sourcing** (every detail reads the
+same `Assembly`) and **external cross-checks** (pass `expect=` from another
+drawing/DXF and validation asserts the derived value matches). See the module
+docstring in [`planes.py`](planes.py).
+
 ## How to use this repo
 
 - Every doc is self-contained Markdown — read it on GitHub or in any editor.

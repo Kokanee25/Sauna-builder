@@ -90,11 +90,12 @@ hard part.
 | File | Purpose |
 |------|---------|
 | [`planes.py`](planes.py) | Datum + layer-stack model. One datum per assembly; every interface is a derived delta off the same stack, so two details can't disagree. Clash/fit/coplanarity are real assertions. |
-| [`sauna_engine.py`](sauna_engine.py) | Build orchestrator: defines the reference outdoor envelope, validates every interface, prints a report, and is where a DXF emitter hooks in. |
+| [`sauna_engine.py`](sauna_engine.py) | Build orchestrator: defines the reference outdoor envelope, validates every interface, and — when clash-free — renders the drawing set. |
+| [`drawing.py`](drawing.py) | Pure-Python SVG renderer. Draws scaled, dimensioned sheets straight from the validated planes (so drawings can't disagree with the model); rasterises to PDF if `cairosvg` is present. |
 | [`tests/test_planes.py`](tests/test_planes.py) | Proves the guards actually catch disagreements (stale inputs, frame-proud, non-coplanar). |
 
 ```bash
-python3 sauna_engine.py        # build + validate the reference envelope
+python3 sauna_engine.py        # validate the envelope AND emit the drawing set
 python3 planes.py              # the standalone detailing demo
 python3 tests/test_planes.py   # run the test suite (no pytest needed)
 ```
@@ -103,6 +104,31 @@ The guarantee is enforced two ways: **single-sourcing** (every detail reads the
 same `Assembly`) and **external cross-checks** (pass `expect=` from another
 drawing/DXF and validation asserts the derived value matches). See the module
 docstring in [`planes.py`](planes.py).
+
+### Getting a printable blueprint set
+
+`python3 sauna_engine.py` writes a numbered sheet set to [`drawings/`](drawings/)
+**only if the model validates clash-free**:
+
+| Sheet | Drawing |
+|-------|---------|
+| A-0 | Floor plan (room, benches, heater, vents, outswing door) |
+| A-1 | Wall section (datum + dimensioned layer stack to the finish plane) |
+| A-2 | Door jamb plan detail (frame face → jamb extension → casing) |
+| A-3 | Threshold/sill section (reach, step-down, pan slope, drain gap) |
+
+Outputs: one `.svg` + `.pdf` per sheet, a combined `sauna-blueprints.pdf`, and a
+print-ready `index.html`.
+
+- **No setup needed for SVG/HTML** — pure standard library.
+- **PDF is optional:** `pip install -r requirements.txt` (cairosvg + pypdf). Without
+  them you still get SVGs and `index.html`.
+- **On iPhone:** open `index.html` (or any `.svg`) in Safari → Share → Print →
+  pinch the preview → Save as PDF. Each sheet prints on its own page.
+
+Every coordinate on every sheet is computed from the same derived planes the
+engine validates — change a layer thickness and the report, the dimensions, and
+the geometry all move together.
 
 ## How to use this repo
 

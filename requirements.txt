@@ -1,0 +1,5 @@
+# Core engine + drawing renderer run on the Python standard library alone.
+# These are OPTIONAL — they only add PDF output. Without them you still get the
+# SVG sheets and a print-ready index.html (print to PDF from any browser/phone).
+cairosvg>=2.7   # SVG -> PDF rasterisation (needs system libcairo)
+pypdf>=4.0      # merge per-sheet PDFs into one sauna-blueprints.pdf

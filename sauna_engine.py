@@ -21,6 +21,9 @@ from planes import (
     inch, Assembly, FasciaDetail, DoorJamb, Threshold,
     Issue, run_validation, report, assert_coplanar,
 )
+from drawing import (
+    Room, wall_section, jamb_plan, threshold_section, floor_plan, save_set,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +34,7 @@ class SaunaBuild:
     name: str
     wall: Assembly
     details: list = field(default_factory=list)
+    room: "Room | None" = None
 
     def validate(self) -> list[Issue]:
         issues = run_validation(*self.details)
@@ -47,25 +51,30 @@ class SaunaBuild:
     def report(self) -> bool:
         print(self.wall.table())
         print()
-        ok = report(self.validate())
-        if ok:
-            self.emit_dxf()
-        return ok
+        return report(self.validate())
 
-    def emit_dxf(self) -> None:
-        # TODO(ezdxf): emit wall section + plan with every plane driven off
-        # the same offsets used above, so the drawing cannot diverge from the
-        # validated model. Hook a real writer here once a clean result is
-        # required before drawings are produced. The planes below are exactly
-        # the ones a writer would consume.
-        planes = {"cladding": self.wall.cladding_plane,
-                  "finish": self.wall.finish_plane}
+    def sheets(self) -> list:
+        """Build the drawing set from the validated model (same numbers)."""
+        out = []
+        if self.room is not None:
+            out.append(floor_plan(self.room, number="A-0"))
+        out.append(wall_section(self.wall, number="A-1"))
         for d in self.details:
             if isinstance(d, DoorJamb):
-                planes["jamb_casing_face"] = d.casing_face
-        drawn = ", ".join(f"{k}={v:.1f}" for k, v in planes.items())
-        print(f"[dxf] (stub) would emit '{self.name}' — model is clash-free. "
-              f"planes: {drawn}")
+                out.append(jamb_plan(d, number="A-2"))
+            elif isinstance(d, Threshold):
+                out.append(threshold_section(d, number="A-3"))
+        return out
+
+    def emit_drawings(self, outdir: str = "drawings") -> dict:
+        """Render the blueprint set to SVG (+ PDF if cairosvg is present)."""
+        written = save_set(self.sheets(), outdir)
+        n_svg, n_pdf = len(written["svg"]), len(written["pdf"])
+        print(f"[draw] wrote {n_svg} SVG"
+              + (f" + {n_pdf} PDF sheet(s)" if n_pdf else " (no PDF — cairosvg "
+                 "not installed; open the SVG/index.html and print to PDF)")
+              + f" to ./{outdir}/  (open {outdir}/index.html)")
+        return written
 
 
 # ---------------------------------------------------------------------------
@@ -101,13 +110,20 @@ def reference_build(external: dict | None = None) -> SaunaBuild:
                   step_down=inch(0.5), pan_slope_pct=4.0,  # 4% clears min fall
                   expect_extension=ext.get("threshold_extension")),
     ]
-    return SaunaBuild("outdoor-reference", wall, details)
+    # Interior plan figures (the docs/ reference: 6 x 5 x 7 ft).
+    room = Room(name="outdoor-reference (6x5x7 ft)",
+                width=inch(72), depth=inch(60), height=inch(84),
+                bench_upper_depth=inch(24), bench_lower_depth=inch(18),
+                door_width=inch(24))
+    return SaunaBuild("outdoor-reference", wall, details, room=room)
 
 
 def main() -> int:
     # Reconcile the model against the independently-maintained drawing record.
     build = reference_build(external=EXTERNAL_AS_DRAWN)
     ok = build.report()
+    if ok:
+        build.emit_drawings("drawings")   # only draw a clash-free model
     return 0 if ok else 1
 
 
